@@ -604,10 +604,11 @@ async def guidelines_compliance_node(ctx: Context, node_input: ClinicalProfile):
     
     yield Event(content=types.Content(role='model', parts=[types.Part.from_text(text="🩺 Auditing treatment recommendations against NCCN guidelines...")]))
     
+    from app.app_utils.guidelines_db import guidelines_db
     disease = profile.inferred_disease
-    guideline_text = NCCN_GUIDELINES_DB.get("breast_cancer", {}).get("guidelines", "")
-    if "lung" in disease.lower():
-        guideline_text = NCCN_GUIDELINES_DB.get("lung_cancer", {}).get("guidelines", "")
+    query = f"Staging workup and treatment for {disease} stage {profile.stage}. Doctor recommendation: {doc_rec}"
+    guideline_chunks = guidelines_db.retrieve_guidelines(query, cancer_type=disease, limit=3)
+    guideline_text = "\n\n".join(guideline_chunks)
         
     try:
         if has_gcp_credentials():
@@ -665,13 +666,19 @@ async def chatbot_interaction_node(ctx: Context, node_input: Any):
     
     try:
         if has_gcp_credentials():
+            from app.app_utils.guidelines_db import guidelines_db
+            disease = profile.inferred_disease if profile else "breast"
+            guideline_chunks = guidelines_db.retrieve_guidelines(user_q, cancer_type=disease, limit=3)
+            rag_context = "\n\n".join(guideline_chunks)
+            
             hist_str = "\n".join([f"{h['role']}: {h['text']}" for h in chat_hist])
             prompt = (
-                f"Patient Clinical Profile: {profile.model_dump_json()}\n"
-                f"NCCN Guidelines Audit: {compliance.model_dump_json()}\n\n"
+                f"Patient Clinical Profile: {profile.model_dump_json() if profile else 'None'}\n"
+                f"NCCN Guidelines Audit: {compliance.model_dump_json() if compliance else 'None'}\n\n"
+                f"Matched NCCN Guidelines Context:\n{rag_context}\n\n"
                 f"Conversation History:\n{hist_str}\n\n"
                 f"Patient Question: {user_q}\n\n"
-                "Formulate a compassionate, plain-language, medically accurate response citing specific patient records and guidelines."
+                "Formulate a compassionate, plain-language, medically accurate response citing the matched guidelines context and patient records."
             )
             
             chat_resp = await call_gemini_structured(

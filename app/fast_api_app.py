@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import contextlib
+import json
+import logging
 import os
 from collections.abc import AsyncIterator
 
@@ -22,7 +24,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from google.adk.cli.fast_api import get_fast_api_app
 from google.adk.runners import Runner
-from google.cloud import logging as google_cloud_logging
+from starlette.requests import Request
 
 from app.app_utils import services
 from app.app_utils.a2a import attach_a2a_routes
@@ -30,10 +32,22 @@ from app.app_utils.telemetry import setup_telemetry
 from app.app_utils.typing import Feedback
 
 load_dotenv()
-setup_telemetry()
-_, project_id = google.auth.default()
-logging_client = google_cloud_logging.Client()
-logger = logging_client.logger(__name__)
+
+# Configure standard Python logging for console logs
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+try:
+    setup_telemetry()
+except Exception as e:
+    logger.warning(f"Telemetry setup skipped: {e}")
+
+try:
+    _, project_id = google.auth.default()
+except Exception as e:
+    logger.warning(f"Google Cloud credentials not found: {e}")
+    project_id = None
+
 allow_origins = (
     os.getenv("ALLOW_ORIGINS", "").split(",") if os.getenv("ALLOW_ORIGINS") else None
 )
@@ -45,6 +59,13 @@ AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.agent import app as adk_app
     from app.agent import root_agent
+    from app.app_utils.guidelines_db import guidelines_db
+
+    # Seed the vector database on startup
+    try:
+        guidelines_db.seed_database()
+    except Exception as e:
+        logger.warning(f"Guidelines DB seeding skipped or failed: {e}")
 
     runner = Runner(
         app=adk_app,
@@ -66,15 +87,38 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app: FastAPI = get_fast_api_app(
     agents_dir=AGENT_DIR,
-    web=True,
+    web=False,
+    trigger_sources=["pubsub"],
     artifact_service_uri=services.ARTIFACT_SERVICE_URI,
     allow_origins=allow_origins,
     session_service_uri=services.SESSION_SERVICE_URI,
     otel_to_cloud=False,
     lifespan=lifespan,
 )
-app.title = "second-opinion-temp"
-app.description = "API for interacting with the Agent second-opinion-temp"
+app.title = "antigravity experiments"
+app.description = "API for interacting with the Agent antigravity experiments"
+
+
+@app.middleware("http")
+async def normalize_pubsub_subscription(request: Request, call_next):
+    """Normalize projects/.../subscriptions/NAME to just NAME.
+
+    Pub/Sub push deliveries include the fully-qualified subscription
+    resource path. The ADK trigger handler uses this value as the
+    session user_id. Normalizing to the short name keeps session
+    records clean and consistent.
+    """
+    if request.url.path.endswith("/trigger/pubsub") and request.method == "POST":
+        body = await request.body()
+        try:
+            data = json.loads(body)
+            sub = data.get("subscription", "")
+            if "/" in sub:
+                data["subscription"] = sub.rsplit("/", 1)[-1]
+                request._body = json.dumps(data).encode()
+        except (json.JSONDecodeError, KeyError):
+            pass
+    return await call_next(request)
 
 
 @app.post("/feedback")
@@ -87,7 +131,7 @@ def collect_feedback(feedback: Feedback) -> dict[str, str]:
     Returns:
         Success message
     """
-    logger.log_struct(feedback.model_dump(), severity="INFO")
+    logger.info(f"Feedback received: {feedback.model_dump()}")
     return {"status": "success"}
 
 
@@ -95,4 +139,4 @@ def collect_feedback(feedback: Feedback) -> dict[str, str]:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8080)
