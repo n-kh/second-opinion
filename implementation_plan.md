@@ -1,6 +1,8 @@
-# Implementation Plan: Medical History Synthesis & NCCN Guidelines Validator
+# Implementation Plan: Medical History Synthesis & NCCN Guidelines Validator (Kaggle Capstone Edition)
 
-This document outlines the product requirements and technical design for the **OncoCompanion (or Medical History Synthesis System)**, which allows users to upload their medical records (PDFs, images, text), automatically categorizes and extracts key clinical findings, runs a patient-facing chatbot, and checks treatment recommendations against NCCN (National Comprehensive Cancer Network) and other standard cancer guidelines.
+This document outlines the product requirements and technical design for the **OncoCompanion (or Medical History Synthesis System)**. This system is designed as a submission for the [Kaggle Vibe-Coding Agents Capstone Project Competition](https://www.kaggle.com/competitions/vibecoding-agents-capstone-project). 
+
+The application enables patients to upload their medical history (PDFs, images, text), automatically extracts and synthesizes key clinical facts using **MedGemma** and Gemini, and audits doctor recommendations against the National Comprehensive Cancer Network (NCCN) guidelines.
 
 ---
 
@@ -20,13 +22,13 @@ A secure, patient-centric web application that:
 ```mermaid
 graph TD
     A[Patient: Uploads Records] --> B[Pipeline: OCR & Document Extraction]
-    B --> C[NLP Engine: Document Classification & Entity Extraction]
-    C --> D[Synthesis: Patient Clinical Profile & Disease Inference]
-    D --> E[Staging: Formulate clinical staging e.g., TNM, Stage IIB]
+    B --> C[Gemini Engine: Document Classification & OCR Entity Extraction]
+    C --> D[MedGemma NLP: Patient Clinical Profile & Disease Inference]
+    D --> E[MedGemma Staging: Formulate clinical staging e.g., TNM, Stage IIB]
     D --> F[Guideline Engine: NCCN Guideline Matching]
-    F --> G[Compliance Check: Compare Doctor Rec vs NCCN Pathways]
+    F --> G[MedGemma Auditor: Compare Doctor Rec vs NCCN Pathways]
     G --> H[Output: Patient Dashboard & Actionable Next Steps]
-    H --> I[Chatbot: Interactive Q&A on Patient Profile & Guidelines]
+    H --> I[MedGemma Chatbot: Interactive Q&A on Patient Profile & Guidelines]
 ```
 
 ---
@@ -37,7 +39,9 @@ We propose a modern full-stack application built using:
 - **Frontend**: Next.js (React) + TypeScript + Tailwind CSS for a premium, accessible dashboard.
 - **Backend**: FastAPI (Python) for fast API endpoints, background processing tasks, and integration with the ADK workflow framework.
 - **Database / Vector Store**: ChromaDB or PgVector for document embeddings and RAG search. PostgreSQL for patient metadata and audit logs.
-- **GenAI / Medical NLP**: Google Gemini 2.5 Flash / Pro (via Vertex AI / Google Gen AI SDK) for multimodal extraction, clinical synthesis, and compliance analysis.
+- **GenAI / Medical NLP**: 
+  - **MedGemma**: Used for all clinical synthesis, medical inference, NCCN guidelines compliance auditing, and plain-language patient chatbot responses.
+  - **Google Gemini 2.5 Flash**: Used as the multimodal OCR parser and document classifier.
 
 ### Proposed Code Directory Structure
 
@@ -53,9 +57,9 @@ medical_app/
 │   │   └── schemas.py          # Pydantic schemas (Document, Chat, Staging, Compliance)
 │   ├── services/
 │   │   ├── document_parser.py  # OCR and Multimodal extraction (Gemini Vision)
-│   │   ├── clinical_nlp.py     # Disease inference, staging, and metadata extractor
+│   │   ├── clinical_nlp.py     # MedGemma Disease inference, staging, and metadata extractor
 │   │   ├── guidelines_engine.py# NCCN guidelines querying and verification
-│   │   └── chat_service.py     # RAG-based Chatbot over patient files
+│   │   └── chat_service.py     # MedGemma RAG-based Chatbot over patient files
 │   └── routers/
 │       ├── documents.py        # Upload, list, analyze endpoints
 │       ├── compliance.py       # NCCN audit endpoints
@@ -76,11 +80,12 @@ medical_app/
 ### A. Document Parser & Clinical NLP Service
 - **Ingestion**: Supports PDF, JPG, PNG, and raw text.
 - **Processing**:
-  - For PDF/Images: Uses **Gemini 2.5 Flash/Pro**'s multimodal capabilities as the primary OCR/extractor, passing the document bytes directly with a strict clinical parsing prompt.
+  - For PDF/Images: Uses **Gemini 2.5 Flash**'s multimodal capabilities as the primary OCR/extractor, passing the document bytes directly with a strict clinical parsing prompt.
   - Generates structured output via `Pydantic` schema containing:
     - Document Type (e.g., Pathology Report, MRI Scan, CT Scan, Lab Results, Progress Note).
     - Clinical Entities: Diagnoses, Procedures, Medications, Lab Values, Tumor Markers (e.g., HER2, ER, PR, EGFR, ALK), TNM Staging parameters.
     - Doctor Recommendations: Stated next steps, surgical recommendations, chemotherapy/radiation plans.
+  - Clinical Profile Synthesis: **MedGemma** synthesizes the clinical timeline from the extracted document data.
 
 ### B. The Guidelines & Compliance Engine (NCCN & others)
 - **NCCN Guidelines Reference Database**: 
@@ -89,7 +94,7 @@ medical_app/
 - **Verification Pipeline**:
   1. **Query**: The system queries the Vector DB using the inferred disease, stage, and biomarkers.
   2. **Extraction**: Retrieve the standard treatment pathways (First-Line therapy, Second-Line therapy, surgical margins, radiation schedules).
-  3. **Comparison (LLM-as-a-Judge)**: A Gemini agent compares the Doctor's Recommendation (extracted from patient records) against the NCCN guidelines.
+  3. **Comparison (LLM-as-a-Judge)**: **MedGemma** compares the Doctor's Recommendation (extracted from patient records) against the NCCN guidelines.
   4. **Staging Verification**: Calculates whether the documented stage aligns with clinical findings (e.g., if a tumor size is 4cm and node is positive, is the stage correctly identified as Stage IIB/III?).
   5. **Missing Information & Next Steps**: Identify if critical diagnostic steps are missing (e.g., BRCA1/2 genetic testing was not done but is recommended for this patient profile).
 
@@ -97,6 +102,7 @@ medical_app/
 - **Context Isolation**: When the user chats, the context is strictly scoped to:
   - The parsed content of *their* uploaded documents.
   - The specific NCCN guidelines matched to their diagnosis.
+- **Model selection**: **MedGemma** handles the response formulation.
 - **System Instructions**:
   - Speak in compassionate, patient-friendly language while remaining clinically accurate.
   - Provide a clear medical disclaimer: *"I am an AI assistant and not a medical doctor. Please consult your oncologist..."*
@@ -135,10 +141,10 @@ To achieve a "premium, state-of-the-art" feel (in accordance with Google's Web A
 ### Phase 2: Staging & NCCN Matching (Week 2)
 - Seed ChromaDB with guidelines for 2-3 major cancer types (Breast, Lung, Prostate).
 - Write `guidelines_engine.py` to match extracted patient profiles with NCCN pathways.
-- Develop the compliance comparison prompts and test with mock case files.
+- Develop the compliance comparison prompts for **MedGemma** and test with mock case files.
 
 ### Phase 3: Conversational Chatbot (Week 3)
-- Implement `chat_service.py` with custom clinical system instructions and RAG retrieval.
+- Implement `chat_service.py` using **MedGemma** with custom clinical system instructions and RAG retrieval.
 - Build the streaming chat UI on the frontend.
 - Evaluate the chatbot using `agents-cli eval` to prevent hallucinations and ensure safe tone.
 
