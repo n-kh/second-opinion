@@ -25,6 +25,8 @@ def test_agent_stream() -> None:
     Integration test for the agent stream functionality.
     Tests that the agent returns valid streaming responses.
     """
+    import os
+    os.environ["INTEGRATION_TEST"] = "TRUE"
 
     session_service = InMemorySessionService()
 
